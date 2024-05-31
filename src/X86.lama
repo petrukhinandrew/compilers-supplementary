@@ -288,20 +288,27 @@ fun binopType(op) {
   | "<=" -> "CMP" 
   | ">=" -> "CMP"
   | "&&" -> "AND"
-  | "!!" -> "NOT"
+  | "!!" -> "OR"
   esac
 }
 
 fun compileArithm(env, op, code, s, t) {
   case env.allocate of
-    [u, env] ->
-      [env, code <+ Mov(t, eax) <+ Binop(op, s, eax) <+ Mov(eax, u)]
+    [u, env] -> [env, code <+ 
+                  Mov(t, eax) <+ 
+                  Binop(op, s, eax) <+ 
+                  Mov(eax, u)]
   esac
 }
 
 fun compileCmp(env, op, code, s, t) {
   case env.allocate of [u, env] -> 
-    [env, code <+ Mov(s, eax) <+ Binop("cmp", eax, t) <+ Mov(L(0), eax) <+ Set(suffix(op), "%al") <+ Mov(eax, u) ]
+    [env, code <+ 
+      Mov(s, eax) <+ 
+      Binop("cmp", eax, t) <+ 
+      Mov(L(0), eax) <+ 
+      Set(suffix(op), "%al") <+ 
+      Mov(eax, u) ]
   esac
 }
 
@@ -310,8 +317,7 @@ fun compileDivMod(env, op, reg, code, s, t) {
       code <+> 
       move (t, eax) <+ 
       Cltd <+
-      IDiv(s) <+> 
-      move (reg, t)]
+      IDiv(s) <+> move (reg, t)]
 }
 
 -- Compiles stack machine code into a list of x86 instructions. Takes an environment
@@ -362,7 +368,7 @@ fun compile (env, code) {
                       Mov (L (0), eax) <+
                       Set ("e", "%al") <+>
                       move (eax, u)] esac 
-          | "NOT" -> case env.allocate of [u, env] -> [env, 
+          | "OR" -> case env.allocate of [u, env] -> [env, 
                       code <+ 
                       Mov (L (0), edx) <+ 
                       Mov (L (0), eax) <+
