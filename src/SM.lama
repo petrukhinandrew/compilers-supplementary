@@ -86,11 +86,9 @@ fun eval (env, c@[stack, state, world], insns) {
         esac esac
     | DUP -> eval(env, [hd(stack):stack, state, world], tail)
     | LDA (x) -> eval(env, [x : stack, state, world], tail)
-    | STI ->
-      case stack of 
-        y:x:rest -> 
-          eval(env, [y:rest, state <- [x, y], world], tail) 
-      esac
+    | STI -> case stack of y:x:rest -> 
+               eval(env, [y:rest, state <- [x, y], world], tail) 
+             esac
     | DROP -> eval (env, [tl (stack), state, world], tail)
     esac 
   esac 
