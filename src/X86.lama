@@ -410,43 +410,153 @@ fun suffix (op) {
 -- Compiles stack machine code into a list of x86 instructions. Takes an environment
 -- and stack machine code, returns an updated environment and x86 code.
 fun compile (env, code) {
+  fun binopType(op) {
+    case op of 
+      "+" ->  "ARITHM"
+    | "-" ->  "ARITHM"
+    | "*" ->  "ARITHM"
+    | "^" ->  "ARITHM"
+    | "/" ->  "DIV"
+    | "%" ->  "MOD"
+    | "<"  -> "CMP"
+    | ">"  -> "CMP"
+    | "!=" -> "CMP" 
+    | "==" -> "CMP" 
+    | "<=" -> "CMP" 
+    | ">=" -> "CMP"
+    | "&&" -> "AND"
+    | "!!" -> "OR"
+    esac
+  }
+
+  fun compileArithm(env, op, code, s, t) {
+    case env.allocate of
+      [u, env] -> [env, code <+ 
+                    Mov(t, eax) <+ 
+                    Binop(op, s, eax) <+ 
+                    Mov(eax, u)]
+    esac
+  }
+
+  fun compileCmp(env, op, code, s, t) {
+    case env.allocate of [u, env] -> 
+      [env, code <+ 
+        Mov(s, eax) <+ 
+        Binop("cmp", eax, t) <+ 
+        Mov(L(0), eax) <+ 
+        Set(suffix(op), "%al") <+ 
+        Mov(eax, u) ]
+    esac
+  }
+
+  fun compileDivMod(env, op, reg, code, s, t) {
+      [env.push(t), 
+        code <+> 
+        move (t, eax) <+ 
+        Cltd <+
+        IDiv(s) <+> 
+        move (reg, t)]
+  }
+
   fun compile (env, code) {
     foldl (
       fun ([env, scode], i) {
         var code = scode <+ Meta ("# " ++ showSMInsn (i) ++ "\n");
         case i of
           READ ->
-            case env.allocate of
+            case allocate(env) of
 	      [s, env] -> [env, code <+ Push (edx) <+ Push (ecx) <+ Call ("Lread") <+ Pop (ecx) <+ Pop (edx) <+ Mov (eax, s)]
             esac             
         | WRITE ->
-            case env.pop of
+            case pop(env) of
 	      [s, env] -> [env, code <+ Push (edx) <+ Push (ecx) <+ Push (s) <+ Call ("Lwrite") <+ Pop (eax) <+ Pop (ecx) <+ Pop (edx)]
             esac
-        (* Assignment *)
-        
-         -- Some guidelines for generating function calls:
-         --
-         -- 1. generate instructions to save live registers on the X86 stack (use
-         --    env.liveRegisters (number of arguments);
-         -- 2. generate instructions to move actual parameters from the symbolic
-         --    stack to the hardware one;
-         -- 3. generate the call itself;
-         -- 4. discard the actual parameters from the stack;
-         -- 5. restore saved live registers.
-         --
-         -- Some guidelines for generating functions:
-         --
-         -- 1. generate proper prologue for BEGIN instruction (use "prologue" helper); use
-         --    env.enterFunction to create a proper environment;
-         -- 2. generate epilogue for END instruction.
-               
-        | _ -> failure ("codegeneration for instruction %s is not yet implemented\n", i.string)
-        (* End *)
+        | LD (x) -> 
+            case allocate(env) of [s, env] -> 
+              [env, code <+> move (loc (env, x), s)]
+            esac
+        | LDA (l) -> 
+            case allocate(env) of [s, env] -> 
+              [env, code <+ Lea(loc(env, l), s)] 
+            esac
+        | ST (x) ->
+            case peek(env) of
+              s -> [env, code <+> move (s, loc(env, x))]
+            esac
+        | STI -> case pop2(env) of [first, second, env] -> case allocate(env) of
+                  [s, env] -> [env, code <+> move(first, I(0, second)) <+> move(first, s)]
+                 esac esac
+        | CONST (x) ->
+            case allocate(env) of
+              [s, env] -> [env, code <+> move (L(x), s)]
+            esac
+        | BINOP (op) -> case env.pop2 of [s, t, env] -> 
+            case binopType(op) of 
+              "ARITHM" -> compileArithm(env, op, code, s, t)
+            | "CMP"    -> compileCmp(env, op, code, s, t)      
+            | "DIV"    -> compileDivMod(env, op, eax, code, s, t)
+            | "MOD"    -> compileDivMod(env, op, edx, code, s, t)
+            | "AND" -> case env.allocate of [u, env] -> [env, 
+                        code <+ 
+                        Mov (L (0), edx) <+ 
+                        Mov (L (0), eax) <+
+                        Binop ("cmp", s, eax) <+ 
+                        Set ("ne", "%dl") <+
+                        Binop ("cmp", t, eax) <+ 
+                        Set ("ne", "%dh") <+ 
+                        Mov (L (257), eax) <+
+                        Binop ("cmp", edx, eax) <+ 
+                        Mov (L (0), eax) <+
+                        Set ("e", "%al") <+>
+                        move (eax, u)] esac 
+            | "OR" -> case env.allocate of [u, env] -> [env, 
+                        code <+ 
+                        Mov (L (0), edx) <+ 
+                        Mov (L (0), eax) <+
+                        Binop ("cmp", s, eax) <+ 
+                        Set ("e", "%dl") <+
+                        Binop ("cmp", t, eax) <+ 
+                        Set ("e", "%dh") <+ 
+                        Mov (L (257), eax) <+
+                        Binop ("cmp", edx, eax) <+ 
+                        Mov (L (0), eax) <+
+                        Set ("ne", "%al") <+>
+                        move (eax, u)] esac 
+            | _ -> failure("Compile error at binop %s\n", op)
+            esac esac
+        | LABEL (l) -> [if isBarrier (env) then retrieveStack (env, l) else env fi, code <+ Label(l)]
+        | JMP (l) -> [setBarrier (setStack (env, l)), code <+ Jmp(l)]
+        | CJMP(c, l) -> case pop(env) of [v, env] -> [setStack(env, l), code <+ Binop("cmp", L(0), v) <+ CJmp(c, l)] esac
+        | DUP -> case peek(env) of top -> case allocate(env) of [s, env] -> [env, code <+> move (top, s)] esac esac
+        | DROP -> case pop(env) of [_, env] -> [env, code] esac
+        | BEGIN (s, _, l) ->  [enterFunction(env, s, l), code <+> prologue(s)] 
+        | END -> case epilogue(env) of [env, c] -> [env, code <+> c] esac
+        | GLOBAL (name) ->  [addGlobal (env, name), code]
+        | CALL (name, a) ->
+            var rs = liveRegisters (env, a);
+            code := foldl (
+                fun (c, r) { c <+ Push (r)}, 
+                code, 
+                rs);
+            for var i; i := a, i > 0, i := i - 1 do
+              case pop(env) of
+                [a, nenv] ->
+                  code := code <+ Push (a);
+                  env := nenv
+              esac
+            od;
+            code := code <+ Call (name) <+ Binop ("+", L (wordSize * a), esp);
+            code := foldl(
+              fun (c, r) { c <+ Pop (r) }, 
+              code, 
+              rs);
+            case allocate(env) of [s, env] ->
+                [env, code <+> move (eax, s)]
+            esac
+        | _ -> failure ("codgen error for instruction %s\n", i.string)  
         esac
       }, [env, emptyBuffer ()], code)
   }
-
   compile (env, code) 
 }
 
